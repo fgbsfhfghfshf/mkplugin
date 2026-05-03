@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>% Change</title>
+<script src="https://esm.sh/@ctrader/webview-plugin-sdk@1"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #0d0d1a;
+    font-family: Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    padding: 20px;
+  }
+
+  .card {
+    background: rgba(20, 20, 35, 0.95);
+    border: 1px solid #2a2a4a;
+    border-radius: 12px;
+    padding: 16px 24px;
+    width: 100%;
+    max-width: 340px;
+  }
+
+  .symbol {
+    color: #aaaaaa;
+    font-size: 13px;
+    font-weight: 500;
+    text-align: center;
+    margin-bottom: 12px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  .row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid #1e1e30;
+  }
+
+  .row:last-child { border-bottom: none; }
+
+  .lbl {
+    color: #888;
+    font-size: 16px;
+    font-weight: 600;
+    min-width: 40px;
+  }
+
+  .val {
+    font-size: 26px;
+    font-weight: 700;
+  }
+
+  .positive { color: #00e676; }
+  .negative { color: #ff1744; }
+  .neutral  { color: #888888; }
+
+  .updated {
+    color: #444;
+    font-size: 11px;
+    text-align: center;
+    margin-top: 10px;
+  }
+
+  .loading {
+    color: #555;
+    font-size: 18px;
+    text-align: center;
+    padding: 30px;
+  }
+</style>
+</head>
+<body>
+
+<div class="card" id="card">
+  <div class="symbol" id="symbolName">Connecting...</div>
+  <div class="row"><span class="lbl">5m</span><span class="val neutral" id="v5m">--</span></div>
+  <div class="row"><span class="lbl">1h</span><span class="val neutral" id="v1h">--</span></div>
+  <div class="row"><span class="lbl">1D</span><span class="val neutral" id="v1d">--</span></div>
+  <div class="updated" id="updated">--</div>
+</div>
+
+<script type="module">
+  import { clientAdapter } from "https://esm.sh/@ctrader/webview-plugin-sdk@1";
+
+  const adapter = clientAdapter();
+
+  // Store latest quotes per timeframe
+  const data = { m5: null, h1: null, d1: null };
+  let currentSymbol = null;
+
+  adapter.onReady(async () => {
+    // Get current symbol from cTrader
+    const host = await adapter.getHostInfo();
+    currentSymbol = host?.symbolName || "XAUUSD";
+    document.getElementById("symbolName").innerText = currentSymbol;
+
+    // Subscribe to live quotes
+    await adapter.subscribeToSymbolQuotes([currentSymbol], onQuote);
+
+    // Get OHLC data for % change calculations
+    await loadChanges();
+  });
+
+  async function loadChanges() {
+    if (!currentSymbol) return;
+
+    try {
+      const now   = Date.now();
+      const m5ms  = 5  * 60 * 1000;
+      const h1ms  = 60 * 60 * 1000;
+      const d1ms  = 24 * 60 * 60 * 1000;
+
+      const [bars5m, bars1h, bars1d] = await Promise.all([
+        adapter.getTrendbars({ symbolName: currentSymbol, period: "M5",  count: 2 }),
+        adapter.getTrendbars({ symbolName: currentSymbol, period: "H1",  count: 2 }),
+        adapter.getTrendbars({ symbolName: currentSymbol, period: "D1",  count: 2 }),
+      ]);
+
+      updateRow("v5m", calcChange(bars5m));
+      updateRow("v1h", calcChange(bars1h));
+      updateRow("v1d", calcChange(bars1d));
+
+      const now2 = new Date();
+      document.getElementById("updated").innerText =
+        "Updated: " + now2.getHours().toString().padStart(2,"0") + ":" +
+        now2.getMinutes().toString().padStart(2,"0") + ":" +
+        now2.getSeconds().toString().padStart(2,"0");
+
+    } catch (e) {
+      console.error("Error loading bars:", e);
+    }
+
+    // Refresh every 5 seconds
+    setTimeout(loadChanges, 5000);
+  }
+
+  function calcChange(bars) {
+    if (!bars || bars.length < 2) return null;
+    const prev  = bars[bars.length - 2].close;
+    const last  = bars[bars.length - 1].close;
+    if (!prev || prev === 0) return null;
+    return ((last - prev) / prev) * 100;
+  }
+
+  function updateRow(id, change) {
+    const el = document.getElementById(id);
+    if (change === null) {
+      el.innerText = "--";
+      el.className = "val neutral";
+      return;
+    }
+    el.innerText = (change >= 0 ? "+" : "") + change.toFixed(2) + "%";
+    el.className = "val " + (change > 0 ? "positive" : change < 0 ? "negative" : "neutral");
+  }
+
+  function onQuote(quote) {
+    // Live quote received — could trigger immediate refresh
+  }
+</script>
+
+</body>
+</html>
