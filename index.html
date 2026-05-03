@@ -22,27 +22,34 @@
 <body>
 <div id="root">
   <div class="card">
-    <div class="symbol" id="sym">Connecting...</div>
+    <div class="symbol" id="sym">Loading...</div>
     <div class="row"><span class="lbl">5m</span><span class="val neu" id="v5m">--</span></div>
     <div class="row"><span class="lbl">1h</span><span class="val neu" id="v1h">--</span></div>
     <div class="row"><span class="lbl">1D</span><span class="val neu" id="v1d">--</span></div>
-    <div class="status" id="status">Connecting...</div>
+    <div class="status" id="status">Loading...</div>
   </div>
 </div>
 
-<script type="module">
-  import { createClientAdapter }    from "https://esm.sh/@spotware-web-team/sdk-external-api@1.0.1";
-  import {
-    registerEvent, handleConfirmEvent,
-    getLightSymbolList, subscribeQuotes, quoteEvent, getTrendbarList
-  } from "https://esm.sh/@spotware-web-team/sdk@latest";
-  import { take, tap, catchError } from "https://esm.sh/rxjs@7.8.2";
+<script>
+  // Map cTrader symbol names to Yahoo Finance tickers
+  const symbolMap = {
+    "XAUUSD": "GC=F",
+    "XAGUSD": "SI=F",
+    "BTCUSD": "BTC-USD",
+    "ETHUSD": "ETH-USD",
+    "EURUSD": "EURUSD=X",
+    "GBPUSD": "GBPUSD=X",
+    "USDX":   "DX-Y.NYB",
+    "SpotCrude": "CL=F",
+    "OIL":    "CL=F"
+  };
 
-  const adapter  = createClientAdapter({});
-  let symbolId   = null;
-  let symbolName = "XAUUSD";
+  // Get symbol from cTrader query string
+  const params = new URLSearchParams(window.location.search);
+  const ctSymbol = params.get("symbol") || "XAUUSD";
+  const yahooTicker = symbolMap[ctSymbol] || "GC=F";
 
-  function setStatus(msg) { document.getElementById("status").innerText = msg; }
+  document.getElementById("sym").innerText = ctSymbol;
 
   function updateRow(id, change) {
     const el = document.getElementById(id);
@@ -51,76 +58,51 @@
     el.className = "val " + (change > 0 ? "pos" : change < 0 ? "neg" : "neu");
   }
 
-  function calcChange(bars) {
-    if (!bars || bars.length < 2) return null;
-    const prev  = bars[bars.length - 2].close;
-    const last  = bars[bars.length - 1].close;
-    if (!prev || prev === 0) return null;
-    return ((last - prev) / prev) * 100;
+  async function fetchChanges() {
+    try {
+      document.getElementById("status").innerText = "Updating...";
+
+      // Use Yahoo Finance API via allorigins proxy to avoid CORS
+      const url = `https://api.allorigins.win/get?url=${encodeURIComponent(`https://query1.finance.yahoo.com/v8/finance/chart/${yahooTicker}?interval=5m&range=1d`)}`;
+      const res  = await fetch(url);
+      const data = await res.json();
+      const json = JSON.parse(data.contents);
+
+      const quotes   = json?.chart?.result?.[0];
+      const closes   = quotes?.indicators?.quote?.[0]?.close;
+      const timestamps = quotes?.timestamp;
+
+      if (!closes || closes.length < 2) {
+        document.getElementById("status").innerText = "No data";
+        return;
+      }
+
+      // Current price (last non-null)
+      const lastPrice = closes.filter(c => c !== null).slice(-1)[0];
+
+      // 5m ago price
+      const price5m = closes.filter(c => c !== null).slice(-2)[0];
+
+      // 1h ago price (12 x 5m bars)
+      const idx1h   = Math.max(0, closes.filter(c => c !== null).length - 13);
+      const price1h = closes.filter(c => c !== null)[idx1h];
+
+      // 1D = first price of the day
+      const price1d = closes.find(c => c !== null);
+
+      updateRow("v5m", price5m  ? ((lastPrice - price5m)  / price5m)  * 100 : null);
+      updateRow("v1h", price1h  ? ((lastPrice - price1h)  / price1h)  * 100 : null);
+      updateRow("v1d", price1d  ? ((lastPrice - price1d)  / price1d)  * 100 : null);
+
+      document.getElementById("status").innerText = "Updated: " + new Date().toLocaleTimeString();
+    } catch(e) {
+      document.getElementById("status").innerText = "Error: " + e.message;
+    }
+
+    setTimeout(fetchChanges, 15000); // refresh every 15 seconds
   }
 
-  function loadBars() {
-    if (!symbolId) return;
-    const now = Date.now();
-
-    // 5m bars - get last 2
-    getTrendbarList(adapter, { symbolId, period: "M5", count: 2, toTimestamp: now })
-      .pipe(take(1), tap(res => {
-        const bars = res?.trendbarList || res?.payload?.trendbarList || [];
-        updateRow("v5m", calcChange(bars));
-      })).subscribe();
-
-    // 1h bars - get last 2
-    getTrendbarList(adapter, { symbolId, period: "H1", count: 2, toTimestamp: now })
-      .pipe(take(1), tap(res => {
-        const bars = res?.trendbarList || res?.payload?.trendbarList || [];
-        updateRow("v1h", calcChange(bars));
-      })).subscribe();
-
-    // 1D bars - get last 2
-    getTrendbarList(adapter, { symbolId, period: "D1", count: 2, toTimestamp: now })
-      .pipe(take(1), tap(res => {
-        const bars = res?.trendbarList || res?.payload?.trendbarList || [];
-        updateRow("v1d", calcChange(bars));
-      })).subscribe();
-
-    setStatus("Updated: " + new Date().toLocaleTimeString());
-    setTimeout(loadBars, 5000);
-  }
-
-  // Handshake
-  handleConfirmEvent(adapter, {}).pipe(take(1)).subscribe();
-
-  registerEvent(adapter).pipe(
-    take(1),
-    tap(() => {
-      handleConfirmEvent(adapter, {}).pipe(take(1)).subscribe();
-      setStatus("Connected ✓");
-
-      // Get symbol list to find XAUUSD id
-      getLightSymbolList(adapter, {}).pipe(
-        take(1),
-        tap(res => {
-          const symbols = res?.symbolsList || res?.payload?.symbolsList || [];
-          const gold = symbols.find(s => s.symbolName === symbolName);
-          if (gold) {
-            symbolId = gold.symbolId;
-            document.getElementById("sym").innerText = symbolName;
-            subscribeQuotes(adapter, { symbolId: [symbolId] }).pipe(take(1)).subscribe();
-            loadBars();
-          } else {
-            setStatus("Symbol not found");
-          }
-        })
-      ).subscribe();
-
-      // Live quote updates
-      quoteEvent(adapter).pipe(
-        tap(() => { /* bars refreshed on timer */ })
-      ).subscribe();
-    }),
-    catchError(() => { setStatus("Connection failed"); return []; })
-  ).subscribe();
+  fetchChanges();
 </script>
 </body>
 </html>
