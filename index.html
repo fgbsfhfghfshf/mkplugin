@@ -34,27 +34,58 @@
   import { createClientAdapter }    from "https://esm.sh/@spotware-web-team/sdk-external-api@0.0.5";
   import {
     registerEvent, handleConfirmEvent,
-    getLightSymbolList, subscribeQuotes, quoteEvent
+    getLightSymbolList, subscribeQuotes, quoteEvent, getTrendbarList
   } from "https://esm.sh/@spotware-web-team/sdk@0.0.9";
   import { take, tap, catchError } from "https://esm.sh/rxjs@7.8.2";
 
-  const adapter = createClientAdapter({});
+  const adapter  = createClientAdapter({});
+  let symbolId   = null;
+  let symbolName = "XAUUSD";
 
-  // Store prices per symbol
-  const prices   = {};
-  const prevClose= {};
-  let symbolMap  = {}; // name -> id
-  let activeSymbols = ["XAUUSD", "XAGUSD"];
-
-  function setStatus(msg) {
-    document.getElementById("status").innerText = msg;
-  }
+  function setStatus(msg) { document.getElementById("status").innerText = msg; }
 
   function updateRow(id, change) {
     const el = document.getElementById(id);
     if (change === null || isNaN(change)) { el.innerText = "--"; el.className = "val neu"; return; }
     el.innerText = (change >= 0 ? "+" : "") + change.toFixed(2) + "%";
     el.className = "val " + (change > 0 ? "pos" : change < 0 ? "neg" : "neu");
+  }
+
+  function calcChange(bars) {
+    if (!bars || bars.length < 2) return null;
+    const prev  = bars[bars.length - 2].close;
+    const last  = bars[bars.length - 1].close;
+    if (!prev || prev === 0) return null;
+    return ((last - prev) / prev) * 100;
+  }
+
+  function loadBars() {
+    if (!symbolId) return;
+    const now = Date.now();
+
+    // 5m bars - get last 2
+    getTrendbarList(adapter, { symbolId, period: "M5", count: 2, toTimestamp: now })
+      .pipe(take(1), tap(res => {
+        const bars = res?.trendbarList || res?.payload?.trendbarList || [];
+        updateRow("v5m", calcChange(bars));
+      })).subscribe();
+
+    // 1h bars - get last 2
+    getTrendbarList(adapter, { symbolId, period: "H1", count: 2, toTimestamp: now })
+      .pipe(take(1), tap(res => {
+        const bars = res?.trendbarList || res?.payload?.trendbarList || [];
+        updateRow("v1h", calcChange(bars));
+      })).subscribe();
+
+    // 1D bars - get last 2
+    getTrendbarList(adapter, { symbolId, period: "D1", count: 2, toTimestamp: now })
+      .pipe(take(1), tap(res => {
+        const bars = res?.trendbarList || res?.payload?.trendbarList || [];
+        updateRow("v1d", calcChange(bars));
+      })).subscribe();
+
+    setStatus("Updated: " + new Date().toLocaleTimeString());
+    setTimeout(loadBars, 5000);
   }
 
   // Handshake
@@ -65,68 +96,31 @@
     tap(() => {
       handleConfirmEvent(adapter, {}).pipe(take(1)).subscribe();
       setStatus("Connected ✓");
-      document.getElementById("sym").innerText = "XAUUSD";
-      onConnected();
+
+      // Get symbol list to find XAUUSD id
+      getLightSymbolList(adapter, {}).pipe(
+        take(1),
+        tap(res => {
+          const symbols = res?.symbolsList || res?.payload?.symbolsList || [];
+          const gold = symbols.find(s => s.symbolName === symbolName);
+          if (gold) {
+            symbolId = gold.symbolId;
+            document.getElementById("sym").innerText = symbolName;
+            subscribeQuotes(adapter, { symbolId: [symbolId] }).pipe(take(1)).subscribe();
+            loadBars();
+          } else {
+            setStatus("Symbol not found");
+          }
+        })
+      ).subscribe();
+
+      // Live quote updates
+      quoteEvent(adapter).pipe(
+        tap(() => { /* bars refreshed on timer */ })
+      ).subscribe();
     }),
     catchError(() => { setStatus("Connection failed"); return []; })
   ).subscribe();
-
-  function onConnected() {
-    // Get symbol list to find IDs
-    getLightSymbolList(adapter, {}).pipe(
-      take(1),
-      tap(res => {
-        const symbols = res?.symbolsList || res?.payload?.symbolsList || [];
-        symbols.forEach(s => { symbolMap[s.symbolName] = s.symbolId; });
-
-        // Subscribe to XAUUSD quotes
-        const goldId = symbolMap["XAUUSD"];
-        if (goldId) {
-          subscribeQuotes(adapter, { symbolId: [goldId] }).pipe(take(1)).subscribe();
-        }
-      })
-    ).subscribe();
-
-    // Listen to live quotes
-    quoteEvent(adapter).pipe(
-      tap(q => {
-        const payload = q?.payload || q;
-        const symbolId = payload?.symbolId;
-        const bid = payload?.bid;
-        if (!bid) return;
-
-        // find symbol name
-        const symName = Object.keys(symbolMap).find(k => symbolMap[k] === symbolId);
-        if (!symName) return;
-
-        if (!prices[symName]) prices[symName] = { ticks: [], lastDay: null, lastHour: null };
-
-        const now = Date.now();
-        const tick = { price: bid, time: now };
-        prices[symName].ticks.push(tick);
-
-        // Keep only last 24h of ticks
-        prices[symName].ticks = prices[symName].ticks.filter(t => now - t.time < 86400000);
-
-        // Calculate changes
-        const ticks = prices[symName].ticks;
-        const now5m  = ticks.find(t => now - t.time >= 5  * 60 * 1000);
-        const now1h  = ticks.find(t => now - t.time >= 60 * 60 * 1000);
-        const now1d  = ticks[0];
-
-        const change5m = now5m ? ((bid - now5m.price) / now5m.price) * 100 : null;
-        const change1h = now1h ? ((bid - now1h.price) / now1h.price) * 100 : null;
-        const change1d = now1d ? ((bid - now1d.price) / now1d.price) * 100 : null;
-
-        updateRow("v5m", change5m);
-        updateRow("v1h", change1h);
-        updateRow("v1d", change1d);
-
-        document.getElementById("sym").innerText = symName;
-        setStatus("Live ● " + new Date().toLocaleTimeString());
-      })
-    ).subscribe();
-  }
 </script>
 </body>
 </html>
