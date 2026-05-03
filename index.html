@@ -31,11 +31,11 @@
 </div>
 
 <script type="module">
-  import { createClientAdapter }    from "https://esm.sh/@spotware-web-team/sdk-external-api@0.0.5";
+  import { createClientAdapter }    from "https://esm.sh/@spotware-web-team/sdk-external-api@1.0.1";
   import {
     registerEvent, handleConfirmEvent,
     getLightSymbolList, subscribeQuotes, quoteEvent, getTrendbarList
-  } from "https://esm.sh/@spotware-web-team/sdk@0.0.9";
+  } from "https://esm.sh/@spotware-web-team/sdk@latest";
   import { take, tap, catchError } from "https://esm.sh/rxjs@7.8.2";
 
   const adapter  = createClientAdapter({});
